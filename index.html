@@ -1,0 +1,258 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory Match Game</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;min-height:100vh;font-family:Arial,sans-serif;
+ background:linear-gradient(135deg,#20124d,#42217a,#174b80);
+ color:white;text-align:center;padding:20px 12px;
+}
+h1{font-size:clamp(27px,6vw,42px);margin:8px 0;color:#ffe66d}
+.subtitle{color:#d8d5ff;margin-bottom:20px}
+.panel{
+ max-width:520px;margin:auto;background:#ffffff15;
+ border:1px solid #ffffff30;border-radius:22px;
+ padding:18px;box-shadow:0 10px 35px #0003;
+}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.stat{background:#ffffff17;padding:12px 4px;border-radius:12px}
+.stat strong{display:block;font-size:22px;color:#ffe66d;margin-top:5px}
+select,button{
+ border:0;border-radius:12px;padding:12px;font-size:15px;
+ font-weight:bold;cursor:pointer;
+}
+select{background:#fff;color:#29204e;margin-bottom:14px}
+button{background:#ffe66d;color:#25174d}
+button:active{transform:scale(.96)}
+.actions{display:flex;gap:10px;justify-content:center;margin-bottom:18px;flex-wrap:wrap}
+#board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.card{
+ aspect-ratio:1/1;border:2px solid #ffffff28;border-radius:13px;
+ background:linear-gradient(145deg,#7256e8,#4b39a8);
+ display:flex;align-items:center;justify-content:center;
+ font-size:clamp(24px,7vw,40px);cursor:pointer;
+ user-select:none;-webkit-tap-highlight-color:transparent;
+ transition:transform .18s,background .18s;
+}
+.card:active{transform:scale(.94)}
+.card.open,.card.matched{background:#fff;color:#24194b}
+.card.matched{background:#a7ffce;border-color:#53e39a}
+.card:focus-visible{outline:3px solid #ffe66d}
+#message{min-height:28px;margin-top:16px;font-weight:bold;color:#ffe66d}
+.note{font-size:12px;color:#d4d0ef;margin-top:16px}
+@media(max-width:350px){#board{gap:5px}.panel{padding:10px}.card{border-radius:8px}}
+</style>
+</head>
+<body>
+<h1>🧠 Memory Match</h1>
+<p class="subtitle">Flip the cards. Find all matching pairs!</p>
+
+<div class="panel">
+ <div class="stats">
+  <div class="stat">Moves<strong id="moves">0</strong></div>
+  <div class="stat">Time<strong id="time">00:00</strong></div>
+  <div class="stat">Pairs<strong id="pairs">0/8</strong></div>
+ </div>
+
+ <select id="difficulty" aria-label="Difficulty">
+  <option value="8">Easy · 8 pairs</option>
+  <option value="10">Medium · 10 pairs</option>
+  <option value="12">Hard · 12 pairs</option>
+ </select>
+
+ <div class="actions">
+  <button id="restart">🔄 New Game</button>
+  <button id="sound">🔊 Sound On</button>
+ </div>
+
+ <div id="board" aria-label="Memory cards"></div>
+ <div id="message" role="status">Tap any card to start!</div>
+ <div class="note">Match every pair to win 🏆</div>
+</div>
+
+<script>
+const emojis = [
+ "🍎","🍌","🍇","🍓","🍉","🍍",
+ "🥝","🍒","🐱","🐶","🦊","🐼"
+];
+
+const board = document.getElementById("board");
+const movesEl = document.getElementById("moves");
+const timeEl = document.getElementById("time");
+const pairsEl = document.getElementById("pairs");
+const message = document.getElementById("message");
+const difficulty = document.getElementById("difficulty");
+const soundBtn = document.getElementById("sound");
+
+let first = null;
+let second = null;
+let locked = false;
+let moves = 0;
+let matched = 0;
+let totalPairs = 8;
+let seconds = 0;
+let timer = null;
+let started = false;
+let soundOn = true;
+let audioCtx = null;
+
+function playSound(freq=500,duration=.1){
+ if(!soundOn)return;
+ try{
+  audioCtx ||= new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+  const oscillator=audioCtx.createOscillator();
+  const gain=audioCtx.createGain();
+  oscillator.frequency.value=freq;
+  oscillator.type="sine";
+  gain.gain.setValueAtTime(.08,audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+duration);
+  oscillator.connect(gain);
+  gain.connect(audioCtx.destination);
+  oscillator.start();
+  oscillator.stop(audioCtx.currentTime+duration);
+ }catch(e){}
+}
+
+function updateTime(){
+ const m=String(Math.floor(seconds/60)).padStart(2,"0");
+ const s=String(seconds%60).padStart(2,"0");
+ timeEl.textContent=m+":"+s;
+}
+
+function startTimer(){
+ if(started)return;
+ started=true;
+ timer=setInterval(()=>{
+  seconds++;
+  updateTime();
+ },1000);
+}
+
+function shuffle(arr){
+ for(let i=arr.length-1;i>0;i--){
+  const j=Math.floor(Math.random()*(i+1));
+  [arr[i],arr[j]]=[arr[j],arr[i]];
+ }
+ return arr;
+}
+
+function newGame(){
+ clearInterval(timer);
+ first=null;
+ second=null;
+ locked=false;
+ moves=0;
+ matched=0;
+ seconds=0;
+ started=false;
+ totalPairs=Number(difficulty.value);
+ movesEl.textContent="0";
+ pairsEl.textContent="0/"+totalPairs;
+ updateTime();
+ message.textContent="Tap any card to start!";
+ board.innerHTML="";
+ board.style.gridTemplateColumns=
+  totalPairs===12?"repeat(4,minmax(0,1fr))":"repeat(4,minmax(0,1fr))";
+
+ const deck=shuffle([...emojis.slice(0,totalPairs),
+                     ...emojis.slice(0,totalPairs)]);
+ deck.forEach((emoji,index)=>{
+  const card=document.createElement("button");
+  card.className="card";
+  card.type="button";
+  card.textContent="❓";
+  card.dataset.emoji=emoji;
+  card.setAttribute("aria-label","Hidden card "+(index+1));
+  card.setAttribute("aria-pressed","false");
+  card.addEventListener("click",()=>flipCard(card));
+  board.appendChild(card);
+ });
+}
+
+function flipCard(card){
+ if(locked||card.classList.contains("open")||
+    card.classList.contains("matched"))return;
+
+ startTimer();
+ card.textContent=card.dataset.emoji;
+ card.classList.add("open");
+ card.setAttribute("aria-label",card.dataset.emoji);
+ card.setAttribute("aria-pressed","true");
+ playSound(450);
+
+ if(!first){
+  first=card;
+  return;
+ }
+
+ second=card;
+ moves++;
+ movesEl.textContent=moves;
+
+ if(first.dataset.emoji===second.dataset.emoji){
+  first.classList.remove("open");
+  second.classList.remove("open");
+  first.classList.add("matched");
+  second.classList.add("matched");
+  first.disabled=true;
+  second.disabled=true;
+  matched++;
+  pairsEl.textContent=matched+"/"+totalPairs;
+  first=null;
+  second=null;
+  playSound(750,.18);
+
+  if(matched===totalPairs){
+   clearInterval(timer);
+   started=false;
+   message.textContent="🏆 Amazing! You won in "+moves+
+     " moves and "+timeEl.textContent+"!";
+   playSound(950,.3);
+  }else{
+   message.textContent="🎉 Great match! Find another pair.";
+  }
+ }else{
+  locked=true;
+  message.textContent="Not a match. Try again!";
+  const a=first;
+  const b=second;
+  setTimeout(()=>{
+   a.textContent="❓";
+   b.textContent="❓";
+   a.classList.remove("open");
+   b.classList.remove("open");
+   a.setAttribute("aria-label","Hidden card");
+   b.setAttribute("aria-label","Hidden card");
+   a.setAttribute("aria-pressed","false");
+   b.setAttribute("aria-pressed","false");
+   first=null;
+   second=null;
+   locked=false;
+   message.textContent="Keep going! You can do it!";
+  },750);
+ }
+}
+
+document.getElementById("restart").addEventListener("click",()=>{
+ playSound(400);
+ newGame();
+});
+
+difficulty.addEventListener("change",newGame);
+
+soundBtn.addEventListener("click",()=>{
+ soundOn=!soundOn;
+ soundBtn.textContent=soundOn?"🔊 Sound On":"🔇 Sound Off";
+ if(soundOn)playSound(600);
+});
+
+newGame();
+</script>
+</body>
+</html>
